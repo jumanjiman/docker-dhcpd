@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+. script/functions
+
+images="
+check_dhcp
+dhcpd
+fixtures
+"
+
+for img in $images; do
+  smitty docker build --rm -t $img $img/
+done

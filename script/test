@@ -1,0 +1,126 @@
+#!/bin/bash
+set -e
+set -x
+
+. script/functions
+
+smitty docker rm -f dhcpd &> /dev/null || :
+smitty docker rm -f fixtures.data &> /dev/null || :
+smitty docker run --name fixtures.data fixtures true
+
+ports="
+-p 67:67/tcp
+-p 67:67/udp
+-p 546:546/tcp
+-p 546:546/udp
+-p 547:547/tcp
+-p 547:547/udp
+-p 647:647/tcp
+-p 647:647/udp
+-p 847:847/tcp
+-p 847:847/udp
+"
+ports="-P"
+
+#smitty docker run --net=host -d $ports -v $(pwd)/fixtures:/data --name dhcpd dhcpd
+smitty docker run --net=host -d $ports --volumes-from fixtures.data --name dhcpd dhcpd
+#smitty docker run -d $ports -v $(pwd)/fixtures:/data --name dhcpd dhcpd
+
+seconds=5
+smitty sleep $seconds
+
+say Did dhcpd start?
+smitty docker logs dhcpd 2>&1 | grep -q 'Server starting service.' && echo yes || err nope
+
+ip=$(docker inspect --format '{{ .NetworkSettings.IPAddress }}' dhcpd)
+#[[ -n $ip ]] || ip=$(ip -4 addr show dev eth0 | awk '/inet/ {print $2}' | cut -d/ -f1)
+ip=${ip:-192.168.254.162}
+echo dhcpd ip is $ip
+
+#say try with net=host
+#smitty docker run --rm -it --net=host check_dhcp -s $ip -m 01:de:ad:be:ef:01 || smitty docker logs dhcpd
+
+# This should pass with output similar to...
+#   OK: Received 1 DHCPOFFER(s), 1 of 1 requested servers responded, max lease time = 21600 sec.
+#   DHCPDISCOVER from 01:de:ad:be:ef:01 via eth0
+#   DHCPOFFER on 172.17.0.1 to 01:de:ad:be:ef:01 via eth0
+#
+# check_dhcp options:
+#   + echo -e '[INFO] docker' run --net=host --rm -it check_dhcp -s 192.168.254.162 -m 01:de:ad:be:ef:01
+#   [INFO] docker run --net=host --rm -it check_dhcp -s 192.168.254.162 -m 01:de:ad:be:ef:01
+#   + docker run --net=host --rm -it check_dhcp -s 192.168.254.162 -m 01:de:ad:be:ef:01
+#   CRITICAL: No DHCPOFFERs were received.
+#   + :
+#   + docker logs dhcpd
+#   + grep 01:de:ad:be:ef:01
+#   DHCPDISCOVER from 01:de:ad:be:ef:01 via eth0
+#   DHCPOFFER on 192.168.254.2 to 01:de:ad:be:ef:01 via eth0
+#
+# Current commit:
+#   + echo dhcpd ip is 192.168.254.162
+#   dhcpd ip is 192.168.254.162
+#   + mac=01:de:ad:be:ef:01
+#   + smitty docker run --rm -it check_dhcp -s 192.168.254.162 -m 01:de:ad:be:ef:01 -u -v
+#   + echo
+#
+#   + echo
+#
+#   + echo -e '[INFO] docker' run --rm -it check_dhcp -s 192.168.254.162 -m 01:de:ad:be:ef:01 -u -v
+#   [INFO] docker run --rm -it check_dhcp -s 192.168.254.162 -m 01:de:ad:be:ef:01 -u -v
+#   + docker run --rm -it check_dhcp -s 192.168.254.162 -m 01:de:ad:be:ef:01 -u -v
+#   DHCP socket: 3
+#   Pretending to be relay client 172.17.0.86
+#   DHCPDISCOVER to 192.168.254.162 port 67
+#   DHCPDISCOVER XID: 262836907 (0xFAA92AB)
+#   DHCDISCOVER ciaddr:  0.0.0.0
+#   DHCDISCOVER yiaddr:  0.0.0.0
+#   DHCDISCOVER siaddr:  0.0.0.0
+#   DHCDISCOVER giaddr:  172.17.0.86
+#   send_dhcp_packet result: 548
+#
+#   recv_result_1: 300
+#   recv_result_2: 300
+#   receive_dhcp_packet() result: 300
+#   receive_dhcp_packet() source: 172.17.42.1
+#   Result=OK
+#   DHCPOFFER from IP address 172.17.42.1 via 172.17.42.1
+#   DHCPOFFER XID: 262836907 (0xFAA92AB)
+#   DHCPOFFER chaddr: 01DEADBEEF01
+#   DHCPOFFER ciaddr: 0.0.0.0
+#   DHCPOFFER yiaddr: 172.17.0.1
+#   DHCPOFFER siaddr: 0.0.0.0
+#   DHCPOFFER giaddr: 172.17.0.86
+#   Option: 53 (0x01)
+#   Option: 54 (0x04)
+#   Option: 51 (0x04)
+#   Option: 1 (0x04)
+#   Option: 3 (0x04)
+#   Option: 12 (0x12)
+#   Option: 2 (0x04)
+#   Lease Time: 21600 seconds
+#   Renewal Time: 0 seconds
+#   Rebinding Time: 0 seconds
+#   Added offer from server @ 172.17.42.1 of IP address 172.17.0.1
+#
+#   No (more) data received (nfound: 0)
+#   Result=ERROR
+#   Total responses seen on the wire: 1
+#   Valid responses for this machine: 1
+#   CRITICAL: Received 1 DHCPOFFER(s), 0 of 1 requested servers responded, max lease time = 21600 sec.
+#   + :
+#   + docker logs dhcpd
+#   + grep 01:de:ad:be:ef:01
+#   DHCPDISCOVER from 01:de:ad:be:ef:01 via 172.17.0.86
+#   DHCPOFFER on 172.17.0.1 to 01:de:ad:be:ef:01 via 172.17.0.86
+#
+mac="01:de:ad:be:ef:01"
+#smitty docker run --mac-address=$mac --rm -it check_dhcp -s $ip -m $mac || :
+smitty docker run --rm -it check_dhcp -s $ip -m $mac -u -v || :
+docker logs dhcpd 2>&1 | grep $mac
+
+# This should fail with output similar to...
+#   CRITICAL: No DHCPOFFERs were received.
+#   DHCPDISCOVER from 01:de:ad:be:ef:02 via eth0: network 172.17.0.0/16: no free leases
+mac="01:de:ad:be:ef:02"
+smitty docker run --rm -it check_dhcp -s $ip -m $mac || :
+docker logs dhcpd 2>&1 | grep $mac
